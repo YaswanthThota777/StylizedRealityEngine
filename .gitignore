@@ -1,0 +1,32 @@
+# Unity generated files and folders
+Library/
+Temp/
+obj/
+Build/
+Builds/
+UserSettings/
+.vs/
+.vscode/
+.DS_Store
+*.log
+
+# Generated files
+*.apk
+*.aab
+*.exe
+*.ilk
+*.pdb
+*.pch
+*.exp
+*.lib
+*.idb
+*.aps
+*.ncb
+*.opensdf
+*.sdf
+*.opt
+
+# Project files
+*.csproj
+*.sln.docstates
+*.sln.iml
