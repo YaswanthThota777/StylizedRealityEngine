@@ -5,29 +5,45 @@ Shader "Custom/AnimeShader"
         _MainTex ("Texture", 2D) = "white" {}
 
         // Outline
-        _OutlineStrength  ("Outline Strength",   Range(0, 2))    = 0.68
-        _OutlineThickness ("Outline Thickness",  Range(1, 3))    = 1.5
-        _OutlineThreshold ("Outline Threshold",  Range(0.01, 0.3)) = 0.06
+        _OutlineStrength  ("Outline Strength",   Range(0, 2))      = 0.55
+        _OutlineThickness ("Outline Thickness",  Range(1, 4))      = 1.3
+        _OutlineThreshold ("Outline Threshold",  Range(0.01, 0.3)) = 0.05
 
         // Cel-Shading
-        _ShadowSteps      ("Shadow Steps",        Range(2, 6))     = 3.0
-        _ShadowThreshold  ("Shadow Threshold",    Range(0.1, 0.8)) = 0.42
-        _ShadowSoftness   ("Shadow Softness",     Range(0.0, 0.15)) = 0.04
-        _ShadowDark       ("Shadow Darkness",     Range(0.5, 1.0)) = 0.82
-        _CoolTint         ("Shadow Cool Tint",    Color) = (0.85, 0.90, 1.10, 1)
-        _WarmTint         ("Highlight Warm Tint", Color) = (1.08, 1.02, 0.95, 1)
+        _ShadowSteps      ("Shadow Steps",        Range(2, 8))      = 5.0
+        _ShadowThreshold  ("Shadow Threshold",    Range(0.1, 0.8))  = 0.38
+        _ShadowSoftness   ("Shadow Softness",     Range(0.0, 0.3))  = 0.12
+        _ShadowDark       ("Shadow Darkness",     Range(0.3, 1.0))  = 0.72
+        _CoolTint         ("Shadow Cool Tint",    Color) = (0.72, 0.80, 1.15, 1)
+        _WarmTint         ("Highlight Warm Tint", Color) = (1.15, 1.05, 0.88, 1)
 
         // Color Enhancement
-        _Saturation  ("Saturation",  Range(0.5, 3.0)) = 1.70
-        _Contrast    ("Contrast",    Range(0.5, 2.0)) = 1.12
-        _Brightness  ("Brightness",  Range(0.5, 1.5)) = 1.02
+        _Saturation  ("Saturation",  Range(0.5, 4.0)) = 2.20
+        _Contrast    ("Contrast",    Range(0.5, 2.5)) = 1.28
+        _Brightness  ("Brightness",  Range(0.5, 1.5)) = 1.05
 
         // Smoothing
-        _SmoothStrength   ("Smooth Strength",     Range(0.0, 1.0)) = 0.35
-        _BilateralSharp   ("Bilateral Sharpness", Range(5.0, 80.0)) = 40.0
+        _SmoothStrength   ("Smooth Strength",     Range(0.0, 1.0)) = 0.45
+        _BilateralSharp   ("Bilateral Sharpness", Range(5.0, 80.0)) = 55.0
 
         // Cel quantisation blend (0 = full continuous, 1 = full quantised)
-        _CelBlend ("Cel Blend", Range(0.0, 1.0)) = 0.6
+        _CelBlend ("Cel Blend", Range(0.0, 1.0)) = 0.45
+
+        // Bloom / Light Glow (Shinkai-style light scattering)
+        _BloomThreshold  ("Bloom Threshold",  Range(0.3, 1.0)) = 0.62
+        _BloomIntensity  ("Bloom Intensity",  Range(0.0, 3.0)) = 1.20
+        _BloomRadius     ("Bloom Spread",     Range(1.0, 8.0)) = 4.0
+
+        // Atmospheric Haze (Shinkai dreamy-sky quality)
+        _HazeColor     ("Atmospheric Haze Color",     Color) = (0.55, 0.65, 0.90, 1)
+        _HazeIntensity ("Atmospheric Haze Intensity", Range(0.0, 0.6)) = 0.14
+
+        // Vignette (cinematic framing)
+        _VignetteStrength ("Vignette Strength", Range(0.0, 2.0)) = 0.60
+        _VignetteRadius   ("Vignette Radius",   Range(0.3, 1.0)) = 0.68
+
+        // Chromatic Aberration (cinematic lens effect)
+        _ChromaStrength ("Chromatic Aberration", Range(0.0, 0.015)) = 0.004
     }
 
     SubShader
@@ -61,6 +77,18 @@ Shader "Custom/AnimeShader"
             float _SmoothStrength;
             float _BilateralSharp;
             float _CelBlend;
+
+            float  _BloomThreshold;
+            float  _BloomIntensity;
+            float  _BloomRadius;
+
+            float4 _HazeColor;
+            float  _HazeIntensity;
+
+            float _VignetteStrength;
+            float _VignetteRadius;
+
+            float _ChromaStrength;
 
             struct appdata
             {
@@ -109,14 +137,31 @@ Shader "Custom/AnimeShader"
                 float2(-1, 1), float2( 0, 1), float2( 1, 1)
             };
 
+            // 4×4 tent-kernel offsets for bloom approximation
+            static const float2 kBloomOffsets[16] = {
+                float2(-1.5,-1.5), float2(-0.5,-1.5), float2( 0.5,-1.5), float2( 1.5,-1.5),
+                float2(-1.5,-0.5), float2(-0.5,-0.5), float2( 0.5,-0.5), float2( 1.5,-0.5),
+                float2(-1.5, 0.5), float2(-0.5, 0.5), float2( 0.5, 0.5), float2( 1.5, 0.5),
+                float2(-1.5, 1.5), float2(-0.5, 1.5), float2( 0.5, 1.5), float2( 1.5, 1.5)
+            };
+
             fixed4 frag(v2f i) : SV_Target
             {
                 float2 texel = _MainTex_TexelSize.xy;
 
-                // === PASS 1: Bilateral Smoothing ===
+                // === PASS 1: Chromatic Aberration (cinematic lens effect) ===
+                // Shifts R and B channels outward from center for a subtle lens look.
+                float2 dir = i.uv - 0.5;
+                float  ca  = _ChromaStrength * length(dir);
+                float  cr  = tex2D(_MainTex, i.uv + dir * ca).r;
+                float  cg  = tex2D(_MainTex, i.uv).g;
+                float  cb  = tex2D(_MainTex, i.uv - dir * ca).b;
+                float3 caCol = float3(cr, cg, cb);
+
+                // === PASS 2: Bilateral Smoothing ===
                 // Averages neighbors weighted by color similarity → smooth flat
                 // areas while keeping sharp edges (like anime's clean look).
-                float3 center = tex2D(_MainTex, i.uv).rgb;
+                float3 center = caCol;
                 float3 acc    = center;
                 float  wSum   = 1.0;
                 float  sharp  = _BilateralSharp;
@@ -132,7 +177,7 @@ Shader "Custom/AnimeShader"
                 }
                 float3 col = lerp(center, acc / wSum, _SmoothStrength);
 
-                // === PASS 2: Sobel Edge Detection → Anime Outlines ===
+                // === PASS 3: Sobel Edge Detection → Anime Outlines ===
                 // Full 3×3 Sobel on luminance; thickness scaled by _OutlineThickness.
                 float2 et = texel * _OutlineThickness;
                 float l00 = Lum(tex2D(_MainTex, i.uv + float2(-1,-1)*et).rgb);
@@ -152,15 +197,15 @@ Shader "Custom/AnimeShader"
                 float edgeMask = smoothstep(_OutlineThreshold,
                                             _OutlineThreshold * kEdgeRangeMul, edge);
 
-                // === PASS 3: Saturation + Contrast + Brightness ===
+                // === PASS 4: Saturation + Contrast + Brightness ===
                 float3 hsv = RGBtoHSV(col);
                 hsv.y = saturate(hsv.y * _Saturation);     // vivid anime colors
                 hsv.z = saturate(hsv.z * _Brightness);
                 col   = HSVtoRGB(hsv);
                 col   = saturate((col - 0.5) * _Contrast + 0.5);
 
-                // === PASS 4: Warm/Cool Cel-Shading ===
-                // Highlights get a warm anime tint; shadows get a cool/purple tint.
+                // === PASS 5: Warm/Cool Cel-Shading ===
+                // Highlights get a warm golden tint; shadows get a cool/purple tint.
                 float br = Lum(col);
                 float shadowMask = smoothstep(
                     _ShadowThreshold - _ShadowSoftness,
@@ -171,7 +216,7 @@ Shader "Custom/AnimeShader"
                 float3 highlightCol = col * _WarmTint.rgb;
                 col = lerp(shadowCol, highlightCol, shadowMask);
 
-                // === PASS 5: Luminance Quantisation (cel bands) ===
+                // === PASS 6: Luminance Quantisation (cel bands) ===
                 // Snap luminance to N discrete steps for the flat cel-shaded look.
                 float lumNow   = Lum(col);
                 float steps    = max(2.0, _ShadowSteps);
@@ -179,8 +224,42 @@ Shader "Custom/AnimeShader"
                 float lumScale = (lumNow > 0.001) ? (lumSnap / lumNow) : 1.0;
                 col = saturate(col * lerp(1.0, lumScale, _CelBlend));
 
-                // === PASS 6: Draw Outlines ===
+                // === PASS 7: Bloom / Light Glow (Shinkai hallmark) ===
+                // Samples a wide neighbourhood to accumulate light from bright
+                // regions and scatter it back as a warm glow — the distinctive
+                // Makoto Shinkai golden-sunlight bloom.
+                float3 bloomAcc = float3(0, 0, 0);
+                float  bloomW   = 0.0;
+                [unroll]
+                for (int b = 0; b < 16; b++)
+                {
+                    float3 s = tex2D(_MainTex, i.uv + kBloomOffsets[b] * texel * _BloomRadius).rgb;
+                    float bright = max(Lum(s) - _BloomThreshold, 0.0);
+                    float w = bright * bright;   // weight by squared brightness above threshold
+                    bloomAcc += s * w;
+                    bloomW   += w;
+                }
+                float3 bloom = (bloomW > 0.001)
+                    ? (bloomAcc / bloomW) * _BloomIntensity * (bloomW / 16.0)
+                    : float3(0, 0, 0);
+                bloom *= _WarmTint.rgb;   // warm tint on bloom for Shinkai golden-light feel
+                col = saturate(col + bloom * 0.30);
+
+                // === PASS 8: Atmospheric Haze ===
+                // Blends a cool-blue haze into the brightest regions to recreate
+                // Shinkai's signature dreamy, over-exposed sky look.
+                float hazeMask = smoothstep(0.55, 0.95, Lum(col));
+                col = lerp(col,
+                           col * _HazeColor.rgb + _HazeColor.rgb * 0.05,
+                           hazeMask * _HazeIntensity);
+
+                // === PASS 9: Draw Outlines ===
                 col = lerp(col, float3(0.0, 0.0, 0.0), edgeMask * _OutlineStrength);
+
+                // === PASS 10: Vignette (cinematic framing) ===
+                float  vigDist  = length(i.uv - 0.5) / _VignetteRadius;
+                float  vignette = 1.0 - smoothstep(0.5, 1.0, vigDist) * _VignetteStrength;
+                col *= vignette;
 
                 return float4(saturate(col), 1.0);
             }

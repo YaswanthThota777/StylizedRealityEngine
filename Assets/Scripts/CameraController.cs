@@ -25,8 +25,9 @@ public class CameraController : MonoBehaviour
             if (!devices[deviceIndex].isFrontFacing) { deviceName = devices[deviceIndex].name; break; }
         }
 
-        webcamTexture = new WebCamTexture(deviceName, Screen.width, Screen.height, 60);
-        webcamTexture.filterMode = FilterMode.Bilinear;
+        // Request the highest available resolution for maximum anime quality
+        webcamTexture = new WebCamTexture(deviceName, 1920, 1080, 60);
+        webcamTexture.filterMode = FilterMode.Trilinear;
         webcamTexture.wrapMode = TextureWrapMode.Clamp;
 
         // Assign the webcam as the RawImage texture and apply the anime material
