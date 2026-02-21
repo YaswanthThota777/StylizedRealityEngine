@@ -1,12 +1,15 @@
-Shader "Custom/SoftAnimeShader"
+Shader "Custom/FullAnimeShader"
 {
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
-        _ShadowThreshold ("Shadow Threshold", Range(0.3,0.7)) = 0.5
-        _ShadowSoftness ("Shadow Softness", Range(0.01,0.2)) = 0.08
-        _EdgeStrength ("Edge Strength", Range(0,2)) = 1.0
-        _WarmTint ("Warm Tint", Color) = (1.05,1.02,1.0,1)
+        _OutlineThickness ("Outline Thickness", Range(0.5,3.0)) = 1.5
+        _OutlineStrength ("Outline Strength", Range(0,1)) = 1.0
+        _ShadowThreshold1 ("Shadow Threshold 1 (Dark)", Range(0.1,0.5)) = 0.25
+        _ShadowThreshold2 ("Shadow Threshold 2 (Mid)", Range(0.3,0.7)) = 0.52
+        _SaturationBoost ("Saturation Boost", Range(1.0,3.0)) = 1.8
+        _ColorSteps ("Color Quantization Steps", Range(3,8)) = 5
+        _WarmTint ("Warm Tint", Color) = (1.08,1.02,0.92,1)
     }
 
     SubShader
@@ -21,9 +24,12 @@ Shader "Custom/SoftAnimeShader"
             #include "UnityCG.cginc"
 
             sampler2D _MainTex;
-            float _ShadowThreshold;
-            float _ShadowSoftness;
-            float _EdgeStrength;
+            float _OutlineThickness;
+            float _OutlineStrength;
+            float _ShadowThreshold1;
+            float _ShadowThreshold2;
+            float _SaturationBoost;
+            float _ColorSteps;
             float4 _WarmTint;
 
             struct appdata
@@ -51,43 +57,72 @@ Shader "Custom/SoftAnimeShader"
                 return dot(c, float3(0.299, 0.587, 0.114));
             }
 
+            // Boost saturation so colors look vivid and anime-like
+            float3 saturate_boost(float3 col, float amount)
+            {
+                float lum = luminance(col);
+                return lerp(float3(lum, lum, lum), col, amount);
+            }
+
+            // Quantize a value into exactly 'steps' discrete levels across [0,1]
+            float quantize(float v, float steps)
+            {
+                return floor(v * (steps - 1)) / (steps - 1);
+            }
+
             fixed4 frag(v2f i) : SV_Target
             {
                 float2 texel = 1.0 / _ScreenParams.xy;
+                float2 offset = texel * _OutlineThickness;
 
-                // Slight smoothing
+                // Sobel edge detection using 8 neighbours for clean anime outlines
+                float3 s00 = tex2D(_MainTex, i.uv + float2(-offset.x,  offset.y)).rgb;
+                float3 s10 = tex2D(_MainTex, i.uv + float2(        0,  offset.y)).rgb;
+                float3 s20 = tex2D(_MainTex, i.uv + float2( offset.x,  offset.y)).rgb;
+                float3 s01 = tex2D(_MainTex, i.uv + float2(-offset.x,         0)).rgb;
+                float3 s21 = tex2D(_MainTex, i.uv + float2( offset.x,         0)).rgb;
+                float3 s02 = tex2D(_MainTex, i.uv + float2(-offset.x, -offset.y)).rgb;
+                float3 s12 = tex2D(_MainTex, i.uv + float2(        0, -offset.y)).rgb;
+                float3 s22 = tex2D(_MainTex, i.uv + float2( offset.x, -offset.y)).rgb;
+
+                float gx = luminance(-s00 - 2*s01 - s02 + s20 + 2*s21 + s22);
+                float gy = luminance(-s00 - 2*s10 - s20 + s02 + 2*s12 + s22);
+                float edge = sqrt(gx*gx + gy*gy);
+                float edgeMask = step(0.15, edge); // hard cut — clean anime ink line
+
+                // Base color with mild smoothing
                 float3 col =
                     (tex2D(_MainTex, i.uv).rgb +
-                     tex2D(_MainTex, i.uv + float2(texel.x,0)).rgb +
-                     tex2D(_MainTex, i.uv - float2(texel.x,0)).rgb +
-                     tex2D(_MainTex, i.uv + float2(0,texel.y)).rgb +
-                     tex2D(_MainTex, i.uv - float2(0,texel.y)).rgb) / 5.0;
+                     tex2D(_MainTex, i.uv + float2( offset.x, 0)).rgb +
+                     tex2D(_MainTex, i.uv + float2(-offset.x, 0)).rgb +
+                     tex2D(_MainTex, i.uv + float2(0,  offset.y)).rgb +
+                     tex2D(_MainTex, i.uv + float2(0, -offset.y)).rgb) / 5.0;
 
-                // Apply warm anime tint
+                // Anime warm tint
                 col *= _WarmTint.rgb;
 
-                // Soft shadow ramp
-                float light = luminance(col);
-                float shadowMask = smoothstep(
-                    _ShadowThreshold - _ShadowSoftness,
-                    _ShadowThreshold + _ShadowSoftness,
-                    light
-                );
+                // Saturation boost for vibrant anime colours
+                col = saturate_boost(col, _SaturationBoost);
 
-                float3 shadowColor = col * 0.75; // darker soft shadow
-                col = lerp(shadowColor, col, shadowMask);
+                // Hard 3-band cel shading (dark shadow / mid shadow / lit)
+                float lum = luminance(col);
+                float3 darkShadow = col * 0.45;
+                float3 midShadow  = col * 0.72;
+                float3 lit        = col;
 
-                // Subtle edge detection (clean)
-                float3 right = tex2D(_MainTex, i.uv + float2(texel.x,0)).rgb;
-                float3 up = tex2D(_MainTex, i.uv + float2(0,texel.y)).rgb;
+                float3 celCol = darkShadow;
+                celCol = lerp(celCol, midShadow, step(_ShadowThreshold1, lum));
+                celCol = lerp(celCol, lit,       step(_ShadowThreshold2, lum));
 
-                float edge = abs(luminance(col) - luminance(right)) +
-                             abs(luminance(col) - luminance(up));
+                // Quantize colours to flatten photorealistic gradients
+                celCol.r = quantize(celCol.r, _ColorSteps);
+                celCol.g = quantize(celCol.g, _ColorSteps);
+                celCol.b = quantize(celCol.b, _ColorSteps);
 
-                float edgeMask = smoothstep(0.15, 0.25, edge);
-                col = lerp(col, float3(0,0,0), edgeMask * 0.5 * _EdgeStrength);
+                // Apply strong black outlines
+                celCol = lerp(celCol, float3(0,0,0), edgeMask * _OutlineStrength);
 
-                return float4(col, 1);
+                return float4(celCol, 1);
             }
             ENDCG
         }
